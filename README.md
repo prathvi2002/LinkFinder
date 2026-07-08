@@ -1,3 +1,13 @@
+> **Note:** This is a modification of the original [LinkFinder](https://github.com/GerbenJavado/LinkFinder) by Gerben_Javado. Everything below is unchanged from upstream, except for three additional options added to `linkfinder.py`:
+>
+> Short Form | Long Form   | Description
+> ---------- | ----------- | -------------
+> -H         | --headers   | Custom header `Key: Value`, repeatable
+> -p         | --proxy     | HTTP/HTTPS proxy URL to route requests through (e.g. `http://127.0.0.1:8080`), certificate verification is skipped, so intercepting proxies like Burp work out of the box
+> -T         | --tor       | Route requests through the local Tor SOCKS5 proxy at `127.0.0.1:9050`
+>
+> `-p`/`--proxy` and `-T`/`--tor` are mutually exclusive; only one may be used at a time. `-T`/`--tor` requires the `PySocks` package (see `requirements.txt`).
+
 <img src="https://user-images.githubusercontent.com/18099289/62728809-f98b0900-ba1c-11e9-8dd8-67111263a21f.png" width=650px>
 
 ## About LinkFinder
