@@ -8,7 +8,8 @@ import os
 os.environ["BROWSER"] = "open"
 
 # Import libraries
-import re, sys, glob, html, argparse, jsbeautifier, webbrowser, subprocess, base64, ssl, xml.etree.ElementTree
+import re, sys, glob, html, argparse, jsbeautifier, webbrowser, subprocess, base64, ssl, socket, xml.etree.ElementTree
+import urllib.request
 
 from gzip import GzipFile
 from string import Template
@@ -116,6 +117,36 @@ def parser_input(input):
 be found (maybe you forgot to add http/https).")]
 
 
+def _open_url(q):
+    '''
+    Open a Request, honoring -p/--proxy or -T/--tor if set
+    '''
+    if args.proxy:
+        # Certificate verification is skipped so intercepting proxies
+        # (e.g. Burp) work out of the box
+        sslcontext = ssl._create_unverified_context()
+        proxy_handler = urllib.request.ProxyHandler({
+            'http': args.proxy,
+            'https': args.proxy
+        })
+        https_handler = urllib.request.HTTPSHandler(context=sslcontext)
+        opener = urllib.request.build_opener(proxy_handler, https_handler)
+        return opener.open(q, timeout=args.timeout)
+    else:
+        # Explicitly ignore any http_proxy/https_proxy environment
+        # variables (common on Tails/Whonix, often pointing at Tor's
+        # SocksPort) so plain requests -- and Tor-routed ones via -t,
+        # which rely on the socket-level monkeypatch below rather than
+        # an HTTP proxy -- aren't accidentally sent through an HTTP
+        # CONNECT handshake. Tor's SocksPort responds to HTTP-looking
+        # traffic with "Tor is not an HTTP Proxy".
+        sslcontext = ssl.create_default_context()
+        no_env_proxy_handler = urllib.request.ProxyHandler({})
+        https_handler = urllib.request.HTTPSHandler(context=sslcontext)
+        opener = urllib.request.build_opener(no_env_proxy_handler, https_handler)
+        return opener.open(q, timeout=args.timeout)
+
+
 def send_request(url):
     '''
     Send requests with Requests
@@ -130,12 +161,15 @@ def send_request(url):
     q.add_header('Accept-Encoding', 'gzip')
     q.add_header('Cookie', args.cookies)
 
+    for header in args.headers:
+        if ':' in header:
+            key, value = header.split(':', 1)
+            q.add_header(key.strip(), value.strip())
+
     try:
-        sslcontext = ssl.create_default_context()
-        response = urlopen(q, timeout=args.timeout, context=sslcontext)
+        response = _open_url(q)
     except:
-        sslcontext = ssl.create_default_context()
-        response = urlopen(q, timeout=args.timeout, context=sslcontext)
+        response = _open_url(q)
 
     if response.info().get('Content-Encoding') == 'gzip':
         data = GzipFile(fileobj=readBytesCustom(response.read())).read()
@@ -309,6 +343,22 @@ if __name__ == "__main__":
     parser.add_argument("-c", "--cookies",
                         help="Add cookies for authenticated JS files",
                         action="store", default="")
+    parser.add_argument("-H", "--headers",
+                        help="Custom header 'Key: Value', repeatable",
+                        action="append", default=[])
+
+    proxy_group = parser.add_mutually_exclusive_group()
+    proxy_group.add_argument("-p", "--proxy",
+                        help="HTTP/HTTPS proxy URL to route requests through \
+                        (e.g. http://127.0.0.1:8080), certificate verification \
+                        is skipped, so intercepting proxies like Burp work out \
+                        of the box",
+                        action="store", default=None)
+    proxy_group.add_argument("-T", "--tor",
+                        help="Route requests through the local Tor SOCKS5 proxy \
+                        at 127.0.0.1:9050",
+                        action="store_true")
+
     default_timeout = 10
     parser.add_argument("-t", "--timeout",
                         help="How many seconds to wait for the server to send data before giving up (default: " + str(default_timeout) + " seconds)",
@@ -317,6 +367,27 @@ if __name__ == "__main__":
 
     if args.input[-1:] == "/":
         args.input = args.input[:-1]
+
+    if args.tor:
+        try:
+            import socks
+        except ImportError:
+            parser_error("PySocks is required for -tor. Install it with: \
+pip install PySocks")
+        socks.set_default_proxy(socks.SOCKS5, "127.0.0.1", 9050)
+        socket.socket = socks.socksocket
+
+        # By default, code that calls socket.create_connection() (as
+        # urllib's http.client does) resolves the hostname locally via
+        # getaddrinfo() BEFORE the SOCKS5 socket ever sees it, then
+        # connects to that pre-resolved IP. This both leaks DNS outside
+        # of Tor and can trigger a SOCKS5 "general failure" reply. Patch
+        # getaddrinfo to skip local resolution and pass the hostname
+        # straight through, so socks.socksocket.connect() resolves it
+        # remotely via Tor instead.
+        def _tor_getaddrinfo(host, port, family=0, socktype=0, proto=0, flags=0):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (host, port))]
+        socket.getaddrinfo = _tor_getaddrinfo
 
     mode = 1
     if args.output == "cli":
