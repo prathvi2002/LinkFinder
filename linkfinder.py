@@ -153,23 +153,39 @@ def send_request(url):
     '''
     q = Request(url)
 
-    q.add_header('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
-        AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36')
-    q.add_header('Accept', 'text/html,\
-        application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8')
-    q.add_header('Accept-Language', 'en-US,en;q=0.8')
-    q.add_header('Accept-Encoding', 'gzip')
-    q.add_header('Cookie', args.cookies)
-
+    # Parse any custom headers passed via -H first, so we know which
+    # default headers (if any) the user wants to override.
+    custom_headers = {}
     for header in args.headers:
         if ':' in header:
             key, value = header.split(':', 1)
-            q.add_header(key.strip(), value.strip())
+            custom_headers[key.strip()] = value.strip()
+    custom_keys_lower = {key.lower() for key in custom_headers}
+
+    default_headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                      '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,'
+                  'image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip',
+        'Cookie': args.cookies,
+    }
+
+    for key, value in default_headers.items():
+        if key.lower() not in custom_keys_lower:
+            q.add_header(key, value)
+
+    for key, value in custom_headers.items():
+        q.add_header(key, value)
 
     try:
         response = _open_url(q)
     except:
         response = _open_url(q)
+
+    if getattr(args, 'verbose', False):
+        print("[%s] %s" % (response.getcode(), url), file=sys.stderr)
 
     if response.info().get('Content-Encoding') == 'gzip':
         data = GzipFile(fileobj=readBytesCustom(response.read())).read()
@@ -327,12 +343,15 @@ if __name__ == "__main__":
                         action="store_true")
     parser.add_argument("-i", "--input",
                         help="Input a: URL, file or folder. \
-                        For folders a wildcard can be used (e.g. '/*.js').",
-                        required="True", action="store")
+                        For folders a wildcard can be used (e.g. '/*.js'). \
+                        If omitted, input is read from stdin (e.g. \
+                        'echo https://example.com/1.js | python3 linkfinder.py -o cli').",
+                        required=False, action="store", default=None)
     parser.add_argument("-o", "--output",
                         help="Where to save the file, \
-                        including file name. Default: output.html",
-                        action="store", default="output.html")
+                        including file name, or 'cli' to print to stdout. \
+                        Default: cli",
+                        action="store", default="cli")
     parser.add_argument("-r", "--regex",
                         help="RegEx for filtering purposes \
                         against found endpoint (e.g. ^/api/)",
@@ -344,8 +363,16 @@ if __name__ == "__main__":
                         help="Add cookies for authenticated JS files",
                         action="store", default="")
     parser.add_argument("-H", "--headers",
-                        help="Custom header 'Key: Value', repeatable",
+                        help="Custom header 'Key: Value', repeatable. Overrides \
+                        the corresponding default header if one is sent \
+                        automatically (e.g. -H 'User-Agent: My-UA' replaces \
+                        the default browser User-Agent).",
                         action="append", default=[])
+    parser.add_argument("-v", "--verbose",
+                        help="Print each request's HTTP response status code \
+                        to the terminal (stderr); does not affect the \
+                        HTML/cli output.",
+                        action="store_true")
 
     proxy_group = parser.add_mutually_exclusive_group()
     proxy_group.add_argument("-p", "--proxy",
@@ -364,6 +391,14 @@ if __name__ == "__main__":
                         help="How many seconds to wait for the server to send data before giving up (default: " + str(default_timeout) + " seconds)",
                         default=default_timeout, type=int, metavar="<seconds>")
     args = parser.parse_args()
+
+    if not args.input:
+        if sys.stdin.isatty():
+            parser_error("no input defined, use -i/--input or pipe input via stdin \
+(e.g. 'echo https://example.com/1.js | python3 linkfinder.py -o cli').")
+        args.input = sys.stdin.readline().strip()
+        if not args.input:
+            parser_error("no input received on stdin.")
 
     if args.input[-1:] == "/":
         args.input = args.input[:-1]
