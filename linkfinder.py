@@ -10,6 +10,7 @@ os.environ["BROWSER"] = "open"
 # Import libraries
 import re, sys, glob, html, argparse, jsbeautifier, webbrowser, subprocess, base64, ssl, socket, xml.etree.ElementTree
 import urllib.request
+from urllib.parse import urljoin
 
 from gzip import GzipFile
 from string import Template
@@ -283,6 +284,21 @@ def parser_file(content, regex_str, mode=1, more_regex=None, no_dup=1):
 
     return filtered_items
 
+def resolve_endpoints(endpoints, base_url):
+    '''
+    Rewrite each endpoint's "link" into a complete, absolute URL by
+    resolving it against base_url (the page/file it was found in).
+
+    This is the same approach subjs uses (Go's url.ResolveReference,
+    an RFC 3986 reference resolution): urljoin() already leaves
+    absolute URLs (with a scheme) untouched, gives protocol-relative
+    refs ("//host/path") the base's scheme, and resolves root-relative
+    and dot-relative paths against the base's host/path.
+    '''
+    for item in endpoints:
+        item["link"] = urljoin(base_url, item["link"])
+    return endpoints
+
 def cli_output(endpoints):
     '''
     Output to CLI
@@ -384,6 +400,14 @@ if __name__ == "__main__":
                         to the terminal (stderr); does not affect the \
                         HTML/cli output.",
                         action="store_true")
+    parser.add_argument("-u", "--complete-url",
+                        help="Resolve each found path into a complete, \
+                        absolute URL using the page/file it was found in \
+                        as the base (e.g. '/api/test.php' becomes \
+                        'https://example.com/api/test.php'), the same way \
+                        subjs does. Off by default, printing raw paths \
+                        as found.",
+                        action="store_true")
 
     proxy_group = parser.add_mutually_exclusive_group()
     proxy_group.add_argument("-p", "--proxy",
@@ -477,6 +501,8 @@ pip install PySocks")
                 url = url['url']
 
             endpoints = parser_file(file, regex_str, mode, args.regex)
+            if args.complete_url:
+                endpoints = resolve_endpoints(endpoints, url)
             if args.domain:
                 for endpoint in endpoints:
                     endpoint = html.escape(endpoint["link"]).encode('ascii', 'ignore').decode('utf8')
@@ -488,6 +514,8 @@ pip install PySocks")
                     try:
                         file = send_request(endpoint)
                         new_endpoints = parser_file(file, regex_str, mode, args.regex)
+                        if args.complete_url:
+                            new_endpoints = resolve_endpoints(new_endpoints, endpoint)
                         if args.output == 'cli':
                             cli_output(new_endpoints)
                         else:
