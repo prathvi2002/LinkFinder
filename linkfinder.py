@@ -335,6 +335,17 @@ def check_url(url):
     else:
         return False
 
+def _split_lines(text):
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+def _looks_like_url_list(lines):
+    '''
+    True if every line looks like a full target (URL, view-source, etc)
+    rather than this being the raw content of a single JS/HTML file.
+    '''
+    schemes = ('http://', 'https://', 'file://', 'ftp://', 'ftps://', 'view-source:')
+    return bool(lines) and all(line.startswith(schemes) for line in lines)
+
 if __name__ == "__main__":
     # Parse command line
     parser = argparse.ArgumentParser()
@@ -392,16 +403,34 @@ if __name__ == "__main__":
                         default=default_timeout, type=int, metavar="<seconds>")
     args = parser.parse_args()
 
-    if not args.input:
+    targets = []
+    if args.input:
+        if args.input[-1:] == "/":
+            args.input = args.input[:-1]
+        # If -i points to a plain-text file containing a list of targets
+        # (one URL per line) rather than a single JS/HTML file, treat
+        # each line as its own target instead of parsing the file's own
+        # content as JS.
+        if (not args.burp and "*" not in args.input
+                and not args.input.startswith((
+                    'http://', 'https://', 'file://', 'ftp://', 'ftps://', 'view-source:'))
+                and os.path.isfile(args.input)):
+            try:
+                with open(args.input, "r") as f:
+                    lines = _split_lines(f.read())
+            except Exception:
+                lines = []
+            if _looks_like_url_list(lines):
+                targets = lines
+        if not targets:
+            targets = [args.input]
+    else:
         if sys.stdin.isatty():
             parser_error("no input defined, use -i/--input or pipe input via stdin \
-(e.g. 'echo https://example.com/1.js | python3 linkfinder.py -o cli').")
-        args.input = sys.stdin.readline().strip()
-        if not args.input:
+(e.g. 'echo https://example.com/1.js | python3 linkfinder.py').")
+        targets = _split_lines(sys.stdin.read())
+        if not targets:
             parser_error("no input received on stdin.")
-
-    if args.input[-1:] == "/":
-        args.input = args.input[:-1]
 
     if args.tor:
         try:
@@ -428,82 +457,86 @@ pip install PySocks")
     if args.output == "cli":
         mode = 0
 
-    # Convert input to URLs or JS files
-    urls = parser_input(args.input)
-
-    # Convert URLs to JS
     output = ''
-    for url in urls:
-        if not args.burp:
-            try:
-                file = send_request(url)
-            except Exception as e:
-                parser_error("invalid input defined or SSL error: %s" % e)
-        else:
-            file = url['js']
-            url = url['url']
+    for target in targets:
+        args.input = target[:-1] if target.endswith("/") else target
 
-        endpoints = parser_file(file, regex_str, mode, args.regex)
-        if args.domain:
-            for endpoint in endpoints:
-                endpoint = html.escape(endpoint["link"]).encode('ascii', 'ignore').decode('utf8')
-                endpoint = check_url(endpoint)
-                if endpoint is False:
-                    continue
-                print("Running against: " + endpoint)
-                print("")
+        # Convert input to URLs or JS files
+        urls = parser_input(args.input)
+
+        # Convert URLs to JS
+        for url in urls:
+            if not args.burp:
                 try:
-                    file = send_request(endpoint)
-                    new_endpoints = parser_file(file, regex_str, mode, args.regex)
-                    if args.output == 'cli':
-                        cli_output(new_endpoints)
-                    else:
-                        output += '''
-                        <h1>File: <a href="%s" target="_blank" rel="nofollow noopener noreferrer">%s</a></h1>
-                        ''' % (html.escape(endpoint), html.escape(endpoint))
-
-                        for endpoint2 in new_endpoints:
-                            url = html.escape(endpoint2["link"])
-                            header = "<div><a href='%s' class='text'>%s" % (
-                                html.escape(url),
-                                html.escape(url)
-                            )
-                            body = "</a><div class='container'>%s</div></div>" % html.escape(
-                                endpoint2["context"]
-                            )
-                            body = body.replace(
-                                html.escape(endpoint2["link"]),
-                                "<span style='background-color:yellow'>%s</span>" %
-                                html.escape(endpoint2["link"])
-                            )
-                            output += header + body
+                    file = send_request(url)
                 except Exception as e:
-                    print("Invalid input defined or SSL error for: " + endpoint)
+                    print("Invalid input defined or SSL error for: %s (%s)" % (url, e), file=sys.stderr)
                     continue
+            else:
+                file = url['js']
+                url = url['url']
 
-        if args.output == 'cli':
-            cli_output(endpoints)
-        else:
-            output += '''
-                <h1>File: <a href="%s" target="_blank" rel="nofollow noopener noreferrer">%s</a></h1>
-                ''' % (html.escape(url), html.escape(url))
+            endpoints = parser_file(file, regex_str, mode, args.regex)
+            if args.domain:
+                for endpoint in endpoints:
+                    endpoint = html.escape(endpoint["link"]).encode('ascii', 'ignore').decode('utf8')
+                    endpoint = check_url(endpoint)
+                    if endpoint is False:
+                        continue
+                    print("Running against: " + endpoint)
+                    print("")
+                    try:
+                        file = send_request(endpoint)
+                        new_endpoints = parser_file(file, regex_str, mode, args.regex)
+                        if args.output == 'cli':
+                            cli_output(new_endpoints)
+                        else:
+                            output += '''
+                            <h1>File: <a href="%s" target="_blank" rel="nofollow noopener noreferrer">%s</a></h1>
+                            ''' % (html.escape(endpoint), html.escape(endpoint))
 
-            for endpoint in endpoints:
-                url = html.escape(endpoint["link"])
-                header = "<div><a href='%s' class='text'>%s" % (
-                    html.escape(url),
-                    html.escape(url)
-                )
-                body = "</a><div class='container'>%s</div></div>" % html.escape(
-                    endpoint["context"]
-                )
-                body = body.replace(
-                    html.escape(endpoint["link"]),
-                    "<span style='background-color:yellow'>%s</span>" %
-                    html.escape(endpoint["link"])
-                )
+                            for endpoint2 in new_endpoints:
+                                url = html.escape(endpoint2["link"])
+                                header = "<div><a href='%s' class='text'>%s" % (
+                                    html.escape(url),
+                                    html.escape(url)
+                                )
+                                body = "</a><div class='container'>%s</div></div>" % html.escape(
+                                    endpoint2["context"]
+                                )
+                                body = body.replace(
+                                    html.escape(endpoint2["link"]),
+                                    "<span style='background-color:yellow'>%s</span>" %
+                                    html.escape(endpoint2["link"])
+                                )
+                                output += header + body
+                    except Exception as e:
+                        print("Invalid input defined or SSL error for: " + endpoint)
+                        continue
 
-                output += header + body
+            if args.output == 'cli':
+                cli_output(endpoints)
+            else:
+                output += '''
+                    <h1>File: <a href="%s" target="_blank" rel="nofollow noopener noreferrer">%s</a></h1>
+                    ''' % (html.escape(url), html.escape(url))
+
+                for endpoint in endpoints:
+                    url = html.escape(endpoint["link"])
+                    header = "<div><a href='%s' class='text'>%s" % (
+                        html.escape(url),
+                        html.escape(url)
+                    )
+                    body = "</a><div class='container'>%s</div></div>" % html.escape(
+                        endpoint["context"]
+                    )
+                    body = body.replace(
+                        html.escape(endpoint["link"]),
+                        "<span style='background-color:yellow'>%s</span>" %
+                        html.escape(endpoint["link"])
+                    )
+
+                    output += header + body
 
     if args.output != 'cli':
         html_save(output)
