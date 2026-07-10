@@ -1,11 +1,12 @@
 > **Note:** This is a modification of the original [LinkFinder](https://github.com/GerbenJavado/LinkFinder) by Gerben_Javado. Everything below is unchanged from upstream, except for these additions/changes to `linkfinder.py`:
 >
-> Short Form | Long Form   | Description
-> ---------- | ----------- | -------------
-> -H         | --headers   | Custom header `Key: Value`, repeatable. Overrides the corresponding default header if one is sent automatically (e.g. `-H 'User-Agent: My-UA'` replaces the default browser User-Agent).
-> -p         | --proxy     | HTTP/HTTPS proxy URL to route requests through (e.g. `http://127.0.0.1:8080`), certificate verification is skipped, so intercepting proxies like Burp work out of the box
-> -T         | --tor       | Route requests through the local Tor SOCKS5 proxy at `127.0.0.1:9050`
-> -v         | --verbose   | Print each request's HTTP response status code to the terminal (stderr); does not affect the HTML/cli output
+> Short Form | Long Form       | Description
+> ---------- | --------------- | -------------
+> -H         | --headers       | Custom header `Key: Value`, repeatable. Overrides the corresponding default header if one is sent automatically (e.g. `-H 'User-Agent: My-UA'` replaces the default browser User-Agent).
+> -p         | --proxy         | HTTP/HTTPS proxy URL to route requests through (e.g. `http://127.0.0.1:8080`), certificate verification is skipped, so intercepting proxies like Burp work out of the box
+> -T         | --tor           | Route requests through the local Tor SOCKS5 proxy at `127.0.0.1:9050`
+> -v         | --verbose       | Print each request's HTTP response status code to the terminal (stderr); does not affect the HTML/cli output
+> -u         | --complete-url  | Resolve each found path into a complete, absolute URL instead of printing it as found (see below)
 >
 > `-p`/`--proxy` and `-T`/`--tor` are mutually exclusive; only one may be used at a time. `-T`/`--tor` requires the `PySocks` package (see `requirements.txt`).
 >
@@ -13,10 +14,33 @@
 > ```
 > echo https://example.com/1.js | python3 linkfinder.py
 > ```
+> Piped stdin (and a `-i` file containing a plain list of URLs, one per line) is processed as a batch: every line is treated as its own target, not just the first.
 >
 > A default browser-like `User-Agent` is now sent automatically (instead of the original's outdated one), unless overridden via `-H`.
 >
 > `-o`/`--output` now defaults to `cli` (was `output.html`). Previously, running the tool without `-o` silently wrote an HTML file and opened it in your browser; now it just prints results to stdout unless you explicitly pass `-o <file>`.
+>
+> ### Building complete URLs (`-u`/`--complete-url`)
+>
+> By default, LinkFinder prints paths exactly as it finds them in the source - `/api/create.php?user=test`, `../shared/util.js`, `//cdn.example.com/lib.js`, and so on - which is often not a URL you can request as-is. `-u`/`--complete-url` resolves each of these against the URL of the page/file it was found in, turning it into a full, request-ready URL, the same way the [subjs](https://github.com/lc/subjs) tool builds complete URLs from discovered paths.
+>
+> This is done with Python's standard `urllib.parse.urljoin`, which implements the same RFC 3986 reference-resolution rules as Go's `url.ResolveReference` (what subjs itself uses under the hood):
+> - an already-absolute URL (with a scheme) is left untouched
+> - a protocol-relative reference (`//host/path`) inherits the base page's scheme
+> - a root-relative path (`/path`) resolves against the base's host
+> - a dot-relative path (`../path`, `./path`) resolves against the base's directory
+>
+> Example, given a page fetched at `http://127.0.0.1:8767/js/main.js`:
+>
+> | Raw match | Resolved with `-u` |
+> |---|---|
+> | `/api/create.php?user=test` | `http://127.0.0.1:8767/api/create.php?user=test` |
+> | `../shared/util.js` | `http://127.0.0.1:8767/shared/util.js` |
+> | `https://cdn.example.com/lib.js` | unchanged |
+> | `//other.example.com/x.js` | `http://other.example.com/x.js` |
+>
+> Applies to results from the initial page/file as well as every file recursively fetched under `-d`/`--domain`, resolved against whichever file the path was actually found in. Off by default; without `-u`, paths are printed exactly as found, matching the original tool's behavior.
+
 
 <img src="https://user-images.githubusercontent.com/18099289/62728809-f98b0900-ba1c-11e9-8dd8-67111263a21f.png" width=650px>
 
